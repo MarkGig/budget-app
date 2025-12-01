@@ -2,8 +2,14 @@ import React, { useEffect, useState } from 'react'
 import type { Transaction, Periodicity, Account } from '../db'
 import { addCategory, getCategories, getSubcategories, getAccounts } from '../db'
 import { DEFAULT_EXPENSE_CATEGORIES, DEFAULT_INCOME_CATEGORIES, DEFAULT_SAVINGS_CATEGORIES } from '../defaultCategories'
-const MAISON_SUBCATEGORIES = ['Assurance', 'Hypothèque', 'Rénovations']
-const VOITURE_SUBCATEGORIES = ['Essence', 'Réparation', 'Assurance', 'Paiement', 'Autres']
+const HABITATION_SUBCATEGORIES = ['Assurance', 'Électricité', 'Entretien', 'Hypothèque', 'Loyer', 'Rénovation', 'Taxes municipales et scolaire']
+const ALIMENTATION_SUBCATEGORIES = ['Épiceries', 'Restaurant / Bar']
+const VOITURE_SUBCATEGORIES = ['Assurance', 'Autres', 'Entretien', 'Essence', 'Paiement']
+const SPORTS_SUBCATEGORIES = ['Abonnement', 'Équipements']
+const DIVERTISSEMENTS_SUBCATEGORIES = ['Autre', 'Cinema et spectacle', 'Jeux et plateforme', 'Streaming audio et vidéo', 'Television et cable']
+const EDUCATION_SUBCATEGORIES = ['Cours en ligne', 'Frais de scolarité', 'Livre / matériel']
+const TECHNOLOGIE_SUBCATEGORIES = ['Cellulaire', 'Internet', 'Logiciel / abonnement']
+const AUTRE_SUBCATEGORIES = ['Animaux', 'Cadeaux', 'Vêtements', 'Voyages']
 
 export default function TransactionForm({ onAdd }: { onAdd: (tx: Omit<Transaction, 'id'>) => void }) {
   const [description, setDescription] = useState('')
@@ -49,7 +55,9 @@ export default function TransactionForm({ onAdd }: { onAdd: (tx: Omit<Transactio
     setAccounts(usableAccounts)
     // Définir le compte chèque par défaut si disponible
     const chequeAccount = usableAccounts.find(a => a.type === 'Chèque')
-    if (chequeAccount) {
+    console.log('Compte chèque trouvé:', chequeAccount)
+    if (chequeAccount && chequeAccount.id) {
+      console.log('Définition du compte par défaut:', chequeAccount.id)
       setAccountId(chequeAccount.id)
     }
   }
@@ -123,23 +131,33 @@ export default function TransactionForm({ onAdd }: { onAdd: (tx: Omit<Transactio
     e.preventDefault();
     const amt = parseFloat(amount);
     if (!description || Number.isNaN(amt)) return;
+    console.log('Soumission transaction - accountId:', accountId)
     if (periodicity === 'Aucune') {
-      await onAdd({ 
+      const transaction = { 
         description, 
         amount: amt, 
         type, 
         category, 
-        subcategory: (category === 'Maison' || category === 'Voiture') ? (subcategory as any) : undefined,
+        subcategory: (category === 'Habitation' || category === 'Alimentation' || category === 'Voiture' || category === 'Sports' || category === 'Divertissements' || category === 'Éducation' || category === 'Technologie et communications' || category === 'Autre') ? (subcategory as any) : undefined,
         periodicity, 
-        date 
-      });
+        date,
+        accountId: accountId || undefined,
+      };
+      console.log('Transaction créée:', transaction)
+      await onAdd(transaction);
     } else {
       const start = recurrenceStart || date;
       const end = noEndDate ? null : recurrenceEnd;
       let current = new Date(start);
       const txs = [];
       let count = 0;
-      while ((!end || current <= new Date(end)) && count < 200) {
+      // Limites raisonnables: 52 semaines (1 an), 24 mois (2 ans), 5 ans pour annuel
+      const maxCount = periodicity === 'Hebdomadaire' ? 52 : 
+                       periodicity === 'Aux 2 semaines' ? 26 :
+                       periodicity === 'Bi-mensuel' ? 24 :
+                       periodicity === 'Mensuel' ? 24 :
+                       periodicity === 'Annuel' ? 5 : 200;
+      while ((!end || current <= new Date(end)) && count < maxCount) {
         // Pour toutes les périodicités, ajuster au bon jour si pas de date de début
         if (!recurrenceStart) {
           if (periodicity === 'Hebdomadaire') {
@@ -158,7 +176,7 @@ export default function TransactionForm({ onAdd }: { onAdd: (tx: Omit<Transactio
           amount: amt,
           type,
           category,
-          subcategory: (category === 'Maison' || category === 'Voiture') ? (subcategory as any) : undefined,
+          subcategory: (category === 'Habitation' || category === 'Alimentation' || category === 'Voiture' || category === 'Sports' || category === 'Divertissements' || category === 'Éducation' || category === 'Technologie et communications' || category === 'Autre') ? (subcategory as any) : undefined,
           periodicity,
           date: current.toISOString().slice(0, 10),
           accountId: accountId || undefined,
@@ -213,6 +231,35 @@ export default function TransactionForm({ onAdd }: { onAdd: (tx: Omit<Transactio
         </div>
       </div>
 
+      {/* show subcategory select if defaults or dynamic subcategories exist */}
+      {((category === 'Habitation' && HABITATION_SUBCATEGORIES.length > 0) || (category === 'Alimentation' && ALIMENTATION_SUBCATEGORIES.length > 0) || (category === 'Voiture' && VOITURE_SUBCATEGORIES.length > 0) || (category === 'Sports' && SPORTS_SUBCATEGORIES.length > 0) || (category === 'Divertissements' && DIVERTISSEMENTS_SUBCATEGORIES.length > 0) || (category === 'Éducation' && EDUCATION_SUBCATEGORIES.length > 0) || (category === 'Technologie et communications' && TECHNOLOGIE_SUBCATEGORIES.length > 0) || (category === 'Autre' && AUTRE_SUBCATEGORIES.length > 0) || subcategoryOptions.length > 0) && (
+        <div>
+          <label className="block text-sm text-gray-600">Sous-catégorie</label>
+          <select className="mt-1 p-2 rounded-md border border-gray-200 w-full" value={subcategory} onChange={(e) => setSubcategory(e.target.value)}>
+            <option value="">-- Sélectionner --</option>
+            {category === 'Habitation' && HABITATION_SUBCATEGORIES.map((sub) => <option key={sub} value={sub}>{sub}</option>)}
+            {category === 'Alimentation' && ALIMENTATION_SUBCATEGORIES.map((sub) => <option key={sub} value={sub}>{sub}</option>)}
+            {category === 'Voiture' && VOITURE_SUBCATEGORIES.map((sub) => <option key={sub} value={sub}>{sub}</option>)}
+            {category === 'Sports' && SPORTS_SUBCATEGORIES.map((sub) => <option key={sub} value={sub}>{sub}</option>)}
+            {category === 'Divertissements' && DIVERTISSEMENTS_SUBCATEGORIES.map((sub) => <option key={sub} value={sub}>{sub}</option>)}
+            {category === 'Éducation' && EDUCATION_SUBCATEGORIES.map((sub) => <option key={sub} value={sub}>{sub}</option>)}
+            {category === 'Technologie et communications' && TECHNOLOGIE_SUBCATEGORIES.map((sub) => <option key={sub} value={sub}>{sub}</option>)}
+            {category === 'Autre' && AUTRE_SUBCATEGORIES.map((sub) => <option key={sub} value={sub}>{sub}</option>)}
+            {subcategoryOptions.filter(sub => {
+              if (category === 'Habitation') return !HABITATION_SUBCATEGORIES.includes(sub);
+              if (category === 'Alimentation') return !ALIMENTATION_SUBCATEGORIES.includes(sub);
+              if (category === 'Voiture') return !VOITURE_SUBCATEGORIES.includes(sub);
+              if (category === 'Sports') return !SPORTS_SUBCATEGORIES.includes(sub);
+              if (category === 'Divertissements') return !DIVERTISSEMENTS_SUBCATEGORIES.includes(sub);
+              if (category === 'Éducation') return !EDUCATION_SUBCATEGORIES.includes(sub);
+              if (category === 'Technologie et communications') return !TECHNOLOGIE_SUBCATEGORIES.includes(sub);
+              if (category === 'Autre') return !AUTRE_SUBCATEGORIES.includes(sub);
+              return true;
+            }).map((sub) => <option key={sub} value={sub}>{sub}</option>)}
+          </select>
+        </div>
+      )}
+
       {/* Compte source */}
       <div>
         <label className="block text-sm text-gray-600">Payé avec (optionnel)</label>
@@ -227,23 +274,6 @@ export default function TransactionForm({ onAdd }: { onAdd: (tx: Omit<Transactio
           ))}
         </select>
       </div>
-
-      {/* show subcategory select if defaults or dynamic subcategories exist */}
-      {((category === 'Maison' && MAISON_SUBCATEGORIES.length > 0) || (category === 'Voiture' && VOITURE_SUBCATEGORIES.length > 0) || subcategoryOptions.length > 0) && (
-        <div>
-          <label className="block text-sm text-gray-600">Sous-catégorie</label>
-          <select className="mt-1 p-2 rounded-md border border-gray-200 w-full" value={subcategory} onChange={(e) => setSubcategory(e.target.value)}>
-            <option value="">-- Sélectionner --</option>
-            {category === 'Maison' && MAISON_SUBCATEGORIES.map((sub) => <option key={sub} value={sub}>{sub}</option>)}
-            {category === 'Voiture' && VOITURE_SUBCATEGORIES.map((sub) => <option key={sub} value={sub}>{sub}</option>)}
-            {subcategoryOptions.filter(sub => {
-              if (category === 'Maison') return !MAISON_SUBCATEGORIES.includes(sub);
-              if (category === 'Voiture') return !VOITURE_SUBCATEGORIES.includes(sub);
-              return true;
-            }).map((sub) => <option key={sub} value={sub}>{sub}</option>)}
-          </select>
-        </div>
-      )}
 
       {showNewCategoryForm && (
         <div className="space-y-2 p-3 bg-blue-50 rounded-md">

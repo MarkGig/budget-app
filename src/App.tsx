@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { addTransaction, getTransactions, Transaction, deleteTransaction, updateTransaction, getAccounts, Account } from './db'
+import { addTransaction, getTransactions, Transaction, deleteTransaction, updateTransaction, getAccounts, Account, updateAccount } from './db'
 import TransactionForm from './components/TransactionForm'
 import TransactionList from './components/TransactionList'
 import GroupedTransactionList from './components/GroupedTransactionList'
@@ -17,8 +17,6 @@ import { startOfWeek, endOfWeek, startOfMonth, endOfMonth, startOfYear, endOfYea
 export default function App() {
   const [transactions, setTransactions] = useState<Transaction[]>([])
   const [accounts, setAccounts] = useState<Account[]>([])
-  const [page, setPage] = useState(0)
-  const pageSize = 100
   const [currentPage, setCurrentPage] = useState<'home' | 'budget' | 'categories' | 'investments' | 'reports' | 'information' | 'liabilities'>(() => {
     const h = window.location.hash || ''
     if (h.startsWith('#/home')) return 'home'
@@ -29,13 +27,12 @@ export default function App() {
     if (h.startsWith('#/liabilities')) return 'liabilities'
     return 'budget'
   })
-  const [periodView, setPeriodView] = useState<'week' | 'month' | 'year'>('month')
   const [showAllTransactions, setShowAllTransactions] = useState(false)
 
   // Navigation is managed via state (`currentPage`) instead of URL hash changes.
 
   useEffect(() => {
-    loadPage(0)
+    loadAllTransactions()
     loadAccounts()
   }, [])
 
@@ -44,11 +41,10 @@ export default function App() {
     setAccounts(accs)
   }
 
-  async function loadPage(pageNumber: number) {
-    const results = await getTransactions(pageNumber * pageSize, pageSize)
-    if (pageNumber === 0) setTransactions(results)
-    else setTransactions((s) => [...s, ...results])
-    setPage(pageNumber)
+  async function loadAllTransactions() {
+    // Charger toutes les transactions sans limite
+    const results = await getTransactions(0, 10000)
+    setTransactions(results)
   }
 
   // Suppression d'une transaction sans effacer tout le tableau
@@ -57,42 +53,95 @@ export default function App() {
     if (tx.id !== undefined) {
       await deleteTransaction(tx.id);
       setTransactions((s) => s.filter((t) => t.id !== tx.id));
+      
+      // Remettre le solde du compte à jour (inverser la transaction)
+      if (tx.accountId) {
+        const account = accounts.find(a => a.id === tx.accountId)
+        if (account) {
+          // Inverser l'ajustement: dépense devient positive, revenu devient négatif
+          const adjustment = tx.type === 'expense' ? tx.amount : -tx.amount
+          const updatedAccount = { ...account, balance: account.balance + adjustment }
+          await updateAccount(updatedAccount)
+          // Recharger les comptes depuis la DB pour synchroniser
+          await loadAccounts()
+        }
+      }
     }
   }
 
   // Edition d'une transaction (inline)
   async function handleEditTransaction(tx: Transaction) {
+    // Trouver l'ancienne version de la transaction
+    const oldTx = transactions.find(t => t.id === tx.id)
+    
     await updateTransaction(tx);
     setTransactions((s) => s.map((t) => t.id === tx.id ? { ...t, ...tx } : t));
+    
+    // Mettre à jour les soldes des comptes si nécessaire
+    if (oldTx) {
+      // Si le compte a changé ou si le montant a changé
+      if (oldTx.accountId !== tx.accountId || oldTx.amount !== tx.amount || oldTx.type !== tx.type) {
+        // Annuler l'effet de l'ancienne transaction
+        if (oldTx.accountId) {
+          const oldAccount = accounts.find(a => a.id === oldTx.accountId)
+          if (oldAccount) {
+            const reverseAdjustment = oldTx.type === 'expense' ? oldTx.amount : -oldTx.amount
+            const updatedOldAccount = { ...oldAccount, balance: oldAccount.balance + reverseAdjustment }
+            await updateAccount(updatedOldAccount)
+          }
+        }
+        
+        // Appliquer l'effet de la nouvelle transaction
+        if (tx.accountId) {
+          const newAccount = accounts.find(a => a.id === tx.accountId)
+          if (newAccount) {
+            const adjustment = tx.type === 'expense' ? -tx.amount : tx.amount
+            const updatedNewAccount = { ...newAccount, balance: newAccount.balance + adjustment }
+            await updateAccount(updatedNewAccount)
+          }
+        }
+        
+        // Recharger les comptes depuis la DB pour synchroniser
+        await loadAccounts()
+      }
+    }
   }
 
   async function handleAdd(tx: Omit<Transaction, 'id'>) {
     const id = await addTransaction(tx)
     setTransactions((s) => [{ ...tx, id: Number(id) }, ...s])
+    
+    // Mettre à jour le solde du compte si une transaction est associée à un compte
+    if (tx.accountId) {
+      const account = accounts.find(a => a.id === tx.accountId)
+      if (account) {
+        // Pour les dépenses: diminuer le solde
+        // Pour les revenus: augmenter le solde
+        const adjustment = tx.type === 'expense' ? -tx.amount : tx.amount
+        const updatedAccount = { ...account, balance: account.balance + adjustment }
+        await updateAccount(updatedAccount)
+        // Recharger les comptes depuis la DB pour synchroniser
+        await loadAccounts()
+      }
+    }
   }
 
-  // Filtrage des transactions selon la période sélectionnée
+  // Filtrage des transactions du mois en cours pour les statistiques
   const now = new Date();
-  let periodStart: Date, periodEnd: Date;
-  if (periodView === 'week') {
-    periodStart = startOfWeek(now, { weekStartsOn: 1 });
-    periodEnd = endOfWeek(now, { weekStartsOn: 1 });
-  } else if (periodView === 'year') {
-    periodStart = startOfYear(now);
-    periodEnd = endOfYear(now);
-  } else {
-    periodStart = startOfMonth(now);
-    periodEnd = endOfMonth(now);
-  }
-  const filteredTransactions = transactions.filter(t => {
+  const monthStart = startOfMonth(now);
+  const monthEnd = endOfMonth(now);
+  const today = now.toISOString().slice(0, 10);
+  
+  const currentMonthTransactions = transactions.filter(t => {
     const d = parseISO(t.date);
-    return isWithinInterval(d, { start: periodStart, end: periodEnd });
+    // Inclure seulement les transactions du mois actuel ET dont la date est passée
+    return isWithinInterval(d, { start: monthStart, end: monthEnd }) && t.date <= today;
   });
   const totals = useMemo(() => {
-    const income = filteredTransactions.filter((t) => t.type === 'income').reduce((s, t) => s + t.amount, 0)
-    const expense = filteredTransactions.filter((t) => t.type === 'expense').reduce((s, t) => s + t.amount, 0)
-    const savings = filteredTransactions.filter((t) => t.type === 'savings').reduce((s, t) => s + t.amount, 0)
-    const retirement = filteredTransactions.filter((t) => t.type === 'savings' && t.category === 'Retraite').reduce((s, t) => s + t.amount, 0)
+    const income = currentMonthTransactions.filter((t) => t.type === 'income').reduce((s, t) => s + t.amount, 0)
+    const expense = currentMonthTransactions.filter((t) => t.type === 'expense').reduce((s, t) => s + t.amount, 0)
+    const savings = currentMonthTransactions.filter((t) => t.type === 'savings').reduce((s, t) => s + t.amount, 0)
+    const retirement = currentMonthTransactions.filter((t) => t.type === 'savings' && t.category === 'Retraite').reduce((s, t) => s + t.amount, 0)
     
     // Calculate available funds (checking + savings accounts)
     const checkingBalance = accounts
@@ -104,7 +153,7 @@ export default function App() {
     const availableFunds = checkingBalance + savingsBalance
     
     return { income, expense, savings, retirement, balance: income - expense, availableFunds, checkingBalance }
-  }, [filteredTransactions, accounts])
+  }, [currentMonthTransactions, accounts])
 
   function handleNavigate(page: 'home' | 'budget' | 'categories' | 'investments' | 'reports' | 'information' | 'liabilities') {
     // Update internal state only (single source of truth for navigation)
@@ -134,7 +183,7 @@ export default function App() {
       pageContent = <CategoryManagementPage onClose={() => {}} />;
       break;
     case 'investments':
-      pageContent = <InvestmentsPage onClose={() => {}} />;
+      pageContent = <InvestmentsPage />;
       break;
     case 'reports':
       pageContent = <ReportsPage />;
@@ -182,16 +231,16 @@ export default function App() {
               </div>
               <div className="card">
                 <div className="flex items-center justify-between">
-                  <h2 className="text-lg font-semibold mb-2 text-gray-800">{showAllTransactions ? 'Transactions' : 'Dernières transactions'}</h2>
+                  <h2 className="text-lg font-semibold mb-2 text-gray-800">{showAllTransactions ? 'Toutes les transactions' : 'Transactions du mois'}</h2>
                   <button className="text-sm text-blue-600 hover:underline" onClick={() => setShowAllTransactions(s => !s)}>
                     {showAllTransactions ? 'Réduire' : 'Tout afficher'}
                   </button>
                 </div>
                 <GroupedTransactionList 
-                  transactions={showAllTransactions ? transactions : transactions.slice(0, 20)}
+                  transactions={showAllTransactions ? transactions : currentMonthTransactions}
                   onEdit={handleEditTransaction}
                   onDelete={handleDeleteTransaction}
-                  onRefresh={() => loadPage(0)}
+                  onRefresh={loadAllTransactions}
                 />
               </div>
             </div>
@@ -201,10 +250,10 @@ export default function App() {
               <div className="card">
                 <h2 className="text-lg font-semibold mb-4 text-gray-800">Dépenses par catégorie</h2>
                 <div className="flex justify-center mb-4">
-                  <CategoryPieChart transactions={filteredTransactions} />
+                  <CategoryPieChart transactions={currentMonthTransactions} />
                 </div>
                 <div className="mt-4">
-                  <ExpenseSummary transactions={filteredTransactions} />
+                  <ExpenseSummary transactions={currentMonthTransactions} />
                 </div>
               </div>
               <div className="card">
@@ -228,11 +277,6 @@ export default function App() {
                 </div>
               </div>
             </div>
-          </div>
-
-          {/* Bouton charger plus en bas */}
-          <div className="mt-6 text-center">
-            <button className="btn" onClick={() => loadPage(Number(page) + 1)}>Charger plus</button>
           </div>
         </section>
       );

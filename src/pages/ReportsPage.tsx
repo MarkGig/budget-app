@@ -521,11 +521,6 @@ export default function ReportsPage() {
 
       <div className="space-y-6">
         <div className="card p-4">
-          <h3 className="text-lg font-semibold mb-4">Revenus vs Dépenses ({new Date().getFullYear()})</h3>
-          <IncomeVsExpenseChart transactions={transactions} />
-        </div>
-
-        <div className="card p-4">
           <h3 className="text-lg font-semibold mb-4">
             Dépenses groupées - {periodType === 'weekly' ? 'Hebdomadaire' : periodType === 'monthly' ? 'Mensuel' : 'Annuel'}
           </h3>
@@ -534,6 +529,11 @@ export default function ReportsPage() {
           ) : (
             <div className="text-sm text-gray-600">Aucune dépense pour la période sélectionnée.</div>
           )}
+        </div>
+
+        <div className="card p-4">
+          <h3 className="text-lg font-semibold mb-4">Revenus vs Dépenses ({new Date().getFullYear()})</h3>
+          <IncomeVsExpenseChart transactions={transactions} />
         </div>
 
         <div className="card p-4">

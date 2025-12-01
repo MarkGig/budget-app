@@ -3,6 +3,18 @@ import { addCategory, getCategories, deleteCategory, getCustomCategoryObjects, a
 
 import { DEFAULT_EXPENSE_CATEGORIES, DEFAULT_INCOME_CATEGORIES, DEFAULT_SAVINGS_CATEGORIES } from '../defaultCategories'
 
+// Sous-catégories par défaut (hardcodées)
+const DEFAULT_SUBCATEGORIES: Record<string, string[]> = {
+  'Habitation': ['Assurance', 'Électricité', 'Entretien', 'Hypothèque', 'Loyer', 'Rénovation', 'Taxes municipales et scolaire'],
+  'Alimentation': ['Épiceries', 'Restaurant / Bar'],
+  'Voiture': ['Assurance', 'Autres', 'Entretien', 'Essence', 'Paiement'],
+  'Sports': ['Abonnement', 'Équipements'],
+  'Divertissements': ['Autre', 'Cinema et spectacle', 'Jeux et plateforme', 'Streaming audio et vidéo', 'Television et cable'],
+  'Éducation': ['Cours en ligne', 'Frais de scolarité', 'Livre / matériel'],
+  'Technologie et communications': ['Cellulaire', 'Internet', 'Logiciel / abonnement'],
+  'Autre': ['Animaux', 'Cadeaux', 'Vêtements', 'Voyages']
+}
+
 export default function CategoryManagementPage({ onClose }: { onClose: () => void }) {
   const [type, setType] = useState<'expense' | 'income' | 'savings'>('expense')
   const [customCats, setCustomCats] = useState<Array<{ id: number; name: string }>>([])
@@ -58,8 +70,17 @@ export default function CategoryManagementPage({ onClose }: { onClose: () => voi
   }
 
   async function loadSubcats(catName: string) {
-    const s = await getSubcategories(catName)
-    setSubcats(s)
+    const customSubs = await getSubcategories(catName)
+    const defaultSubs = DEFAULT_SUBCATEGORIES[catName] || []
+    
+    // Combiner les sous-catégories par défaut avec les personnalisées
+    // Les sous-catégories par défaut n'ont pas d'ID (pour éviter de les supprimer)
+    const defaultSubsWithFakeId = defaultSubs.map((name, index) => ({ 
+      id: -(index + 1), // ID négatif pour identifier les sous-catégories par défaut
+      name 
+    }))
+    
+    setSubcats([...defaultSubsWithFakeId, ...customSubs])
   }
 
   async function handleAddCategory(e?: React.FormEvent) {
@@ -397,40 +418,47 @@ export default function CategoryManagementPage({ onClose }: { onClose: () => voi
           </form>
 
           <div>
-            <p className="text-sm text-gray-600 mb-2">Sous-catégories personnalisées :</p>
-            <ul className="space-y-2">
-              {subcats.map((s) => (
-                <li key={s.id} className="flex items-center justify-between">
-                  {editingId === s.id && editingType === 'subcat' ? (
-                    <input
-                      autoFocus
-                      className="flex-1 p-1 border rounded text-sm"
-                      value={editingName}
-                      onChange={(e) => setEditingName(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') handleSaveEditSubcategory()
-                        if (e.key === 'Escape') { setEditingId(null); setEditingType(null) }
-                      }}
-                    />
-                  ) : (
-                    <span>{s.name}</span>
-                  )}
-                  <div className="flex gap-1">
+            <p className="text-sm text-gray-600 mb-2">Sous-catégories :</p>
+            {subcats.length === 0 ? (
+              <p className="text-sm text-gray-400 italic">Aucune sous-catégorie</p>
+            ) : (
+              <ul className="space-y-2">
+                {subcats.map((s) => (
+                  <li key={s.id} className="flex items-center justify-between">
                     {editingId === s.id && editingType === 'subcat' ? (
-                      <>
-                        <button type="button" className="text-green-600 text-sm" onClick={handleSaveEditSubcategory}>✓</button>
-                        <button type="button" className="text-gray-600 text-sm" onClick={() => { setEditingId(null); setEditingType(null) }}>✕</button>
-                      </>
+                      <input
+                        autoFocus
+                        className="flex-1 p-1 border rounded text-sm"
+                        value={editingName}
+                        onChange={(e) => setEditingName(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') handleSaveEditSubcategory()
+                          if (e.key === 'Escape') { setEditingId(null); setEditingType(null) }
+                        }}
+                      />
                     ) : (
-                      <>
-                        <button type="button" className="text-blue-600 text-sm" onClick={() => handleEditSubcategory(s.id, s.name)}>Éditer</button>
-                        <button type="button" className="text-red-600 text-sm" onClick={() => handleDeleteSubcat(s.id)}>Supprimer</button>
-                      </>
+                      <span className={s.id < 0 ? 'text-gray-700' : ''}>{s.name} {s.id < 0 && <span className="text-xs text-gray-400">(par défaut)</span>}</span>
                     )}
-                  </div>
-                </li>
-              ))}
-            </ul>
+                    <div className="flex gap-1">
+                      {s.id < 0 ? (
+                        // Sous-catégorie par défaut - pas d'actions
+                        <span className="text-xs text-gray-400">-</span>
+                      ) : editingId === s.id && editingType === 'subcat' ? (
+                        <>
+                          <button type="button" className="text-green-600 text-sm" onClick={handleSaveEditSubcategory}>✓</button>
+                          <button type="button" className="text-gray-600 text-sm" onClick={() => { setEditingId(null); setEditingType(null) }}>✕</button>
+                        </>
+                      ) : (
+                        <>
+                          <button type="button" className="text-blue-600 text-sm" onClick={() => handleEditSubcategory(s.id, s.name)}>Éditer</button>
+                          <button type="button" className="text-red-600 text-sm" onClick={() => handleDeleteSubcat(s.id)}>Supprimer</button>
+                        </>
+                      )}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
         </div>
       </div>

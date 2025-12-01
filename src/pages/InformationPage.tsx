@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { Account, addAccount, deleteAccount, getAccounts } from '../db';
+import React, { useEffect, useState, useMemo } from 'react';
+import { Account, addAccount, deleteAccount, getAccounts, updateAccount, recalculateAccountBalances, updateTransactionsCategoryName } from '../db';
 import { AccountType } from '../types';
 
 const accountTypes = [
@@ -23,14 +23,42 @@ const InformationPage: React.FC = () => {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editAccount, setEditAccount] = useState<{ name: string; type: Account['type']; balance: number } | null>(null);
 
+  // Calculer les tendances basées sur les transactions du dernier mois
+  const [accountTrends, setAccountTrends] = useState<Record<number, number>>({});
+
   const formatAmount = (amount: number): string => {
     return amount.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+  };
+
+  const calculateTrends = async (accountsList: Account[]) => {
+    const trends: Record<number, number> = {};
+    const now = new Date();
+    const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const lastMonth = `${now.getMonth() === 0 ? now.getFullYear() - 1 : now.getFullYear()}-${String(now.getMonth() === 0 ? 12 : now.getMonth()).padStart(2, '0')}`;
+    
+    for (const account of accountsList) {
+      if (!account.id) continue;
+      
+      // Chercher le solde du mois dernier dans l'historique
+      const lastMonthBalance = account.balanceHistory?.find(h => h.month === lastMonth)?.balance;
+      
+      if (lastMonthBalance !== undefined) {
+        // Calculer la différence entre le solde actuel et le solde du mois dernier
+        trends[account.id] = account.balance - lastMonthBalance;
+      } else {
+        // Pas d'historique du mois dernier = pas de tendance
+        trends[account.id] = 0;
+      }
+    }
+    
+    setAccountTrends(trends);
   };
 
   useEffect(() => {
     async function fetchAccounts() {
       const storedAccounts = await getAccounts();
       setAccounts(storedAccounts);
+      await calculateTrends(storedAccounts);
     }
     fetchAccounts();
   }, []);
@@ -75,10 +103,10 @@ const InformationPage: React.FC = () => {
 
   const handleEditAccount = async (id: number) => {
     if (!editAccount) return;
-    // Remove then add to update (since no updateAccount in db.ts)
-    await deleteAccount(id);
-    const newId = await addAccount({ ...editAccount });
-    setAccounts((prev) => prev.map(acc => acc.id === id ? { ...editAccount, id: newId } : acc));
+    await updateAccount({ ...editAccount, id });
+    const updatedAccounts = await getAccounts();
+    setAccounts(updatedAccounts);
+    await calculateTrends(updatedAccounts);
     setEditingId(null);
     setEditAccount(null);
   };
@@ -153,6 +181,11 @@ const InformationPage: React.FC = () => {
                 ? groupAccounts.reduce((sum, acc) => sum + (acc.balance > 0 ? acc.balance : 0), 0)
                 : groupAccounts.reduce((sum, acc) => sum + acc.balance, 0);
               
+              // Calculer la tendance du groupe (somme des tendances des comptes du groupe)
+              const groupTrend = groupAccounts.reduce((sum, acc) => {
+                return sum + (accountTrends[acc.id!] || 0);
+              }, 0);
+              
               // Pour les passifs: toujours rouge si > 0
               // Pour les actifs: rouge si négatif, vert si positif
               const isNegative = groupIsLiability ? totalBalance > 0 : totalBalance < 0;
@@ -163,8 +196,16 @@ const InformationPage: React.FC = () => {
                     <h2 className="text-xl font-semibold text-gray-800">{groupName}</h2>
                     <div className="text-right">
                       <div className="text-sm text-gray-600">Total du groupe</div>
-                      <div className={`text-2xl font-bold ${isNegative ? 'text-red-600' : 'text-green-600'}`}>
-                        {formatAmount(totalBalance)} $
+                      <div className="flex items-center gap-2 justify-end">
+                        <div className={`text-2xl font-bold ${isNegative ? 'text-red-600' : 'text-green-600'}`}>
+                          {formatAmount(totalBalance)} $
+                        </div>
+                        {Math.abs(groupTrend) > 0.01 && (
+                          <div className={`flex items-center gap-1 ${groupTrend > 0 ? 'text-green-600' : 'text-red-600'}`}>
+                            <span className="text-2xl font-bold">{groupTrend > 0 ? '↑' : '↓'}</span>
+                            <span className="text-sm font-medium">{Math.abs(groupTrend).toFixed(0)}$</span>
+                          </div>
+                        )}
                       </div>
                     </div>
                   </div>

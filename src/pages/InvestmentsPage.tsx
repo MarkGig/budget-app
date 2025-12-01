@@ -1,209 +1,196 @@
-import React, { useState } from 'react'
+import React, { useEffect, useState, useMemo } from 'react'
+import { Account, getAccounts, Transaction, getTransactions } from '../db'
+import CategoryPieChart from '../components/CategoryPieChart'
+import GroupedTransactionList from '../components/GroupedTransactionList'
 
-interface Investment {
-  id: number
-  name: string
-  type: 'action' | 'fonds' | 'obligation' | 'crypto' | 'immobilier'
-  description: string
-  risk: 'faible' | 'moyen' | 'élevé'
-  rendement: string
-  frais: string
-}
+export default function InvestmentsPage() {
+  const [accounts, setAccounts] = useState<Account[]>([])
+  const [transactions, setTransactions] = useState<Transaction[]>([])
+  const [showAllTransactions, setShowAllTransactions] = useState(false)
 
-const INVESTMENTS: Investment[] = [
-  {
-    id: 1,
-    name: 'Actions (Stocks)',
-    type: 'action',
-    description: 'Achat de parts de propriété dans des entreprises. Potentiel de rendement élevé mais volatilité importante.',
-    risk: 'élevé',
-    rendement: '7-10% annuel historique',
-    frais: '0.1-0.5% par transaction'
-  },
-  {
-    id: 2,
-    name: 'Fonds Mutuels',
-    type: 'fonds',
-    description: 'Portefeuille géré par des professionnels composé d\'actions, obligations et autres titres.',
-    risk: 'moyen',
-    rendement: '5-8% annuel',
-    frais: '0.5-2% annuel (ratio de dépenses)'
-  },
-  {
-    id: 3,
-    name: 'Fonds Indiciels (ETF)',
-    type: 'fonds',
-    description: 'Fonds passifs suivant un indice (S&P 500, TSX). Frais plus bas que les fonds mutuels.',
-    risk: 'moyen',
-    rendement: '5-10% annuel',
-    frais: '0.03-0.2% annuel'
-  },
-  {
-    id: 4,
-    name: 'Obligations',
-    type: 'obligation',
-    description: 'Prêts aux gouvernements ou entreprises. Rendement stable et prévisible.',
-    risk: 'faible',
-    rendement: '3-5% annuel',
-    frais: '0.1-0.5% par transaction'
-  },
-  {
-    id: 5,
-    name: 'Certificats de Placement Garanti (CPG)',
-    type: 'obligation',
-    description: 'Produit d\'épargne garanti par les banques avec rendement fixe et capital protégé.',
-    risk: 'faible',
-    rendement: '4-5% annuel',
-    frais: 'Aucun (généralement)'
-  },
-  {
-    id: 6,
-    name: 'Comptes REER',
-    type: 'fonds',
-    description: 'Compte d\'épargne-retraite avec avantages fiscaux au Canada. Peut contenir actions, obligations, fonds.',
-    risk: 'moyen',
-    rendement: 'Dépend de contenu',
-    frais: '0.2-2% selon investissements'
-  },
-  {
-    id: 7,
-    name: 'Comptes TFSA',
-    type: 'fonds',
-    description: 'Compte d\'épargne libre d\'impôt au Canada. Croissance et retraits non imposables.',
-    risk: 'moyen',
-    rendement: 'Dépend de contenu',
-    frais: '0.2-2% selon investissements'
-  },
-  {
-    id: 8,
-    name: 'Crypto-monnaies',
-    type: 'crypto',
-    description: 'Bitcoin, Ethereum et autres. Très volatiles mais potentiel de croissance exponentielle.',
-    risk: 'élevé',
-    rendement: 'Extrêmement variable',
-    frais: '0.1-1% par transaction'
-  },
-  {
-    id: 9,
-    name: 'Immobilier',
-    type: 'immobilier',
-    description: 'Investissement direct dans propriétés ou REIT (fiducie immobilière).',
-    risk: 'moyen',
-    rendement: '5-8% annuel + appréciation',
-    frais: 'Variable (hypothèque, taxes, maintenance)'
-  },
-  {
-    id: 10,
-    name: 'Dividendes',
-    type: 'action',
-    description: 'Actions ou fonds qui versent des dividendes réguliers. Revenu passif stable.',
-    risk: 'moyen',
-    rendement: '2-6% en dividendes',
-    frais: 'Dépend du placement'
+  useEffect(() => {
+    loadData()
+  }, [])
+
+  async function loadData() {
+    const accs = await getAccounts()
+    const txs = await getTransactions(0, 10000)
+    setAccounts(accs)
+    setTransactions(txs)
   }
-]
 
-export default function InvestmentsPage({ onClose }: { onClose: () => void }) {
-  const [selectedType, setSelectedType] = useState<'tous' | 'action' | 'fonds' | 'obligation' | 'crypto' | 'immobilier'>('tous')
+  // Filtrer les comptes de placement
+  const investmentAccounts = useMemo(() => {
+    return accounts.filter(acc => 
+      acc.type === 'CELI' || 
+      acc.type === 'CELIAPP' ||
+      acc.type === 'REER' || 
+      acc.type === 'Fonds de travailleurs' || 
+      acc.type === 'Placements'
+    )
+  }, [accounts])
 
-  const filtered = selectedType === 'tous' ? INVESTMENTS : INVESTMENTS.filter(inv => inv.type === selectedType)
+  // Total des placements
+  const totalInvestments = useMemo(() => {
+    return investmentAccounts.reduce((sum, acc) => sum + acc.balance, 0)
+  }, [investmentAccounts])
 
-  const getRiskColor = (risk: string) => {
-    switch (risk) {
-      case 'faible': return 'bg-green-100 text-green-800'
-      case 'moyen': return 'bg-yellow-100 text-yellow-800'
-      case 'élevé': return 'bg-red-100 text-red-800'
-      default: return 'bg-gray-100'
-    }
+  // Regrouper par type
+  const investmentsByType = useMemo(() => {
+    const grouped: Record<string, { total: number; accounts: Account[] }> = {}
+    
+    investmentAccounts.forEach(acc => {
+      if (!grouped[acc.type]) {
+        grouped[acc.type] = { total: 0, accounts: [] }
+      }
+      grouped[acc.type].total += acc.balance
+      grouped[acc.type].accounts.push(acc)
+    })
+    
+    return grouped
+  }, [investmentAccounts])
+
+  // Transactions d'épargne/placement récentes
+  const investmentTransactions = useMemo(() => {
+    const investmentAccountIds = new Set(investmentAccounts.map(acc => acc.id))
+    const today = new Date().toISOString().slice(0, 10)
+    return transactions
+      .filter(tx => {
+        // Inclure les transactions de type savings OU liées à un compte de placement
+        // ET seulement celles avant ou égales à aujourd'hui
+        return (tx.type === 'savings' || (tx.accountId && investmentAccountIds.has(tx.accountId))) && tx.date <= today
+      })
+      .sort((a, b) => b.date.localeCompare(a.date))
+  }, [transactions, investmentAccounts])
+
+  const displayedTransactions = useMemo(() => {
+    return showAllTransactions ? investmentTransactions : investmentTransactions.slice(0, 20)
+  }, [investmentTransactions, showAllTransactions])
+
+  // Préparer les données pour le graphique
+  const chartData = useMemo(() => {
+    return investmentAccounts.map(acc => ({
+      ...acc,
+      amount: acc.balance,
+      category: acc.name
+    })) as any[]
+  }, [investmentAccounts])
+
+  const colorMap = useMemo(() => {
+    const map: Record<string, string> = {}
+    investmentAccounts.forEach((acc, i) => {
+      const hue = Math.floor((i * 137.508) % 360)
+      map[acc.name] = `hsl(${hue} 70% 75%)`
+    })
+    return map
+  }, [investmentAccounts])
+
+  const formatAmount = (amount: number) => {
+    return amount.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ' ')
   }
 
   return (
-    <div className="p-6 max-w-6xl mx-auto">
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-3xl font-bold">Guide des Placements</h1>
-        <button className="px-4 py-2 text-sm border rounded hover:bg-gray-100" onClick={onClose}>Retour</button>
-      </div>
+    <div className="p-6 max-w-7xl mx-auto">
+      <h1 className="text-3xl font-bold mb-6">Mes placements</h1>
 
-      <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded">
-        <h2 className="text-lg font-semibold text-blue-900 mb-2">Principes d'investissement</h2>
-        <ul className="text-sm text-blue-800 space-y-1">
-          <li>• <strong>Diversification:</strong> Ne pas mettre tous les œufs dans le même panier</li>
-          <li>• <strong>Horizon temporel:</strong> Plus l'horizon est long, plus on peut prendre de risques</li>
-          <li>• <strong>Coûts:</strong> Minimiser les frais pour maximiser les rendements</li>
-          <li>• <strong>Réequilibrage:</strong> Réviser son portefeuille régulièrement</li>
-        </ul>
-      </div>
-
-      <div className="mb-6 flex flex-wrap gap-2">
-        <button
-          className={`px-4 py-2 rounded text-sm font-medium ${selectedType === 'tous' ? 'bg-blue-600 text-white' : 'bg-gray-200'}`}
-          onClick={() => setSelectedType('tous')}
-        >
-          Tous
-        </button>
-        <button
-          className={`px-4 py-2 rounded text-sm font-medium ${selectedType === 'action' ? 'bg-blue-600 text-white' : 'bg-gray-200'}`}
-          onClick={() => setSelectedType('action')}
-        >
-          Actions
-        </button>
-        <button
-          className={`px-4 py-2 rounded text-sm font-medium ${selectedType === 'fonds' ? 'bg-blue-600 text-white' : 'bg-gray-200'}`}
-          onClick={() => setSelectedType('fonds')}
-        >
-          Fonds
-        </button>
-        <button
-          className={`px-4 py-2 rounded text-sm font-medium ${selectedType === 'obligation' ? 'bg-blue-600 text-white' : 'bg-gray-200'}`}
-          onClick={() => setSelectedType('obligation')}
-        >
-          Obligations
-        </button>
-        <button
-          className={`px-4 py-2 rounded text-sm font-medium ${selectedType === 'crypto' ? 'bg-blue-600 text-white' : 'bg-gray-200'}`}
-          onClick={() => setSelectedType('crypto')}
-        >
-          Crypto
-        </button>
-        <button
-          className={`px-4 py-2 rounded text-sm font-medium ${selectedType === 'immobilier' ? 'bg-blue-600 text-white' : 'bg-gray-200'}`}
-          onClick={() => setSelectedType('immobilier')}
-        >
-          Immobilier
-        </button>
-      </div>
-
-      <div className="grid gap-4">
-        {filtered.map(investment => (
-          <div key={investment.id} className="card p-5 border border-gray-200 rounded-lg hover:shadow-lg transition">
-            <div className="flex items-start justify-between mb-3">
-              <h3 className="text-lg font-semibold">{investment.name}</h3>
-              <span className={`px-3 py-1 rounded-full text-xs font-medium ${getRiskColor(investment.risk)}`}>
-                Risque: {investment.risk.charAt(0).toUpperCase() + investment.risk.slice(1)}
-              </span>
-            </div>
-
-            <p className="text-gray-700 mb-3">{investment.description}</p>
-
-            <div className="grid grid-cols-2 gap-4 text-sm">
-              <div className="bg-green-50 p-3 rounded">
-                <p className="text-gray-600 font-medium">Rendement moyen</p>
-                <p className="text-green-700 font-semibold">{investment.rendement}</p>
-              </div>
-              <div className="bg-orange-50 p-3 rounded">
-                <p className="text-gray-600 font-medium">Frais typiques</p>
-                <p className="text-orange-700 font-semibold">{investment.frais}</p>
-              </div>
-            </div>
+      {/* Résumé total */}
+      <div className="card p-6 mb-6 bg-gradient-to-r from-blue-50 to-indigo-50">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-lg text-gray-600 mb-2">Valeur totale des placements</h2>
+            <p className="text-4xl font-bold text-indigo-600">{formatAmount(totalInvestments)} $</p>
           </div>
-        ))}
+          <div className="text-5xl">💰</div>
+        </div>
       </div>
 
-      <div className="mt-8 p-4 bg-gray-50 border border-gray-200 rounded">
-        <h3 className="font-semibold mb-2">Conseil</h3>
-        <p className="text-sm text-gray-700">
-          Pour un portefeuille équilibré, considérez la règle 80/20 ou 70/30: 80-70% en obligations/fonds sûrs + 20-30% en actions pour la croissance. Ajustez selon votre tolérance au risque et horizon d'investissement.
-        </p>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+        {/* Répartition par type */}
+        <div className="card p-4">
+          <h2 className="text-xl font-semibold mb-4">Répartition par type</h2>
+          {investmentAccounts.length > 0 ? (
+            <div className="flex items-center justify-center">
+              <CategoryPieChart 
+                transactions={chartData} 
+                size={280} 
+                colorMap={colorMap}
+                showPercentInPie
+              />
+            </div>
+          ) : (
+            <p className="text-gray-500 text-center py-8">Aucun placement enregistré</p>
+          )}
+        </div>
+
+        {/* Détail par type */}
+        <div className="card p-4">
+          <h2 className="text-xl font-semibold mb-4">Détail par type</h2>
+          <div className="space-y-3">
+            {Object.entries(investmentsByType).map(([type, data]) => (
+              <div key={type} className="border-l-4 border-indigo-500 pl-4 py-2 bg-gray-50 rounded">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="font-semibold text-gray-800">{type}</span>
+                  <span className="text-lg font-bold text-indigo-600">{formatAmount(data.total)} $</span>
+                </div>
+                <div className="text-sm text-gray-600">
+                  {data.accounts.map(acc => acc.name).join(', ')}
+                </div>
+              </div>
+            ))}
+            {Object.keys(investmentsByType).length === 0 && (
+              <p className="text-gray-500 text-center py-4">Aucun placement</p>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Liste des comptes de placement */}
+      <div className="card p-4 mb-6">
+        <h2 className="text-xl font-semibold mb-4">Comptes de placement</h2>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {investmentAccounts.map(account => (
+            <div key={account.id} className="border-2 border-gray-200 rounded-lg p-4 hover:shadow-lg transition-shadow bg-white">
+              <div className="flex items-start justify-between mb-2">
+                <div>
+                  <h3 className="font-semibold text-gray-800">{account.name}</h3>
+                  <p className="text-xs text-gray-500">{account.type}</p>
+                </div>
+              </div>
+              <div className={`text-2xl font-bold ${account.balance >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                {formatAmount(account.balance)} $
+              </div>
+            </div>
+          ))}
+          {investmentAccounts.length === 0 && (
+            <div className="col-span-full text-center py-8 text-gray-500">
+              <p>Aucun compte de placement</p>
+              <p className="text-sm mt-2">Créez un compte dans "Mes comptes" ou ajoutez une transaction d'épargne</p>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Transactions récentes */}
+      <div className="card p-4">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-xl font-semibold">Transactions récentes</h2>
+          {investmentTransactions.length > 20 && (
+            <button
+              onClick={() => setShowAllTransactions(!showAllTransactions)}
+              className="text-sm text-blue-600 hover:text-blue-800 underline"
+            >
+              {showAllTransactions ? 'Afficher moins' : `Afficher tout (${investmentTransactions.length})`}
+            </button>
+          )}
+        </div>
+        {investmentTransactions.length > 0 ? (
+          <GroupedTransactionList
+            transactions={displayedTransactions}
+            onRefresh={loadData}
+          />
+        ) : (
+          <p className="text-gray-500 text-center py-8">Aucune transaction d'épargne enregistrée</p>
+        )}
       </div>
     </div>
   )

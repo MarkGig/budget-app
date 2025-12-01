@@ -2,6 +2,27 @@
 export async function updateAccount(account: Account) {
   if (!account.id) throw new Error('Account id is required');
   const db = await getDB();
+  
+  // Sauvegarder l'historique mensuel
+  const currentMonth = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`;
+  if (!account.balanceHistory) {
+    account.balanceHistory = [];
+  }
+  
+  // Vérifier si on a déjà un enregistrement pour ce mois
+  const existingIndex = account.balanceHistory.findIndex(h => h.month === currentMonth);
+  if (existingIndex >= 0) {
+    // Mettre à jour le solde du mois actuel
+    account.balanceHistory[existingIndex].balance = account.balance;
+  } else {
+    // Ajouter un nouvel enregistrement pour ce mois
+    account.balanceHistory.push({ month: currentMonth, balance: account.balance });
+    // Garder seulement les 12 derniers mois
+    if (account.balanceHistory.length > 12) {
+      account.balanceHistory = account.balanceHistory.slice(-12);
+    }
+  }
+  
   return db.put(ACCOUNTS_STORE, account);
 }
 // Mettre à jour une transaction par son ID
@@ -9,11 +30,13 @@ export async function updateTransaction(newTx: Transaction) {
   if (!newTx.id) throw new Error('Transaction id is required');
   const db = await getDB();
   
+  const today = new Date().toISOString().slice(0, 10);
+  
   // Récupérer l'ancienne transaction pour ajuster les soldes
   const oldTx = await db.get(TRANSACTIONS_STORE, newTx.id);
   
-  // Annuler l'effet de l'ancienne transaction
-  if (oldTx && oldTx.accountId) {
+  // Annuler l'effet de l'ancienne transaction (seulement si elle était dans le passé)
+  if (oldTx && oldTx.accountId && oldTx.date <= today) {
     const account = await db.get(ACCOUNTS_STORE, oldTx.accountId);
     if (account) {
       if (oldTx.type === 'expense' || oldTx.type === 'savings') {
@@ -25,8 +48,8 @@ export async function updateTransaction(newTx: Transaction) {
     }
   }
   
-  // Appliquer la nouvelle transaction
-  if (newTx.accountId) {
+  // Appliquer la nouvelle transaction (seulement si elle est dans le passé)
+  if (newTx.accountId && newTx.date <= today) {
     const account = await db.get(ACCOUNTS_STORE, newTx.accountId);
     if (account) {
       if (newTx.type === 'expense' || newTx.type === 'savings') {
@@ -44,9 +67,11 @@ export async function updateTransaction(newTx: Transaction) {
 export async function deleteTransaction(id: number) {
   const db = await getDB();
   
+  const today = new Date().toISOString().slice(0, 10);
+  
   // Récupérer la transaction pour ajuster le solde du compte
   const tx = await db.get(TRANSACTIONS_STORE, id);
-  if (tx && tx.accountId) {
+  if (tx && tx.accountId && tx.date <= today) {
     const account = await db.get(ACCOUNTS_STORE, tx.accountId);
     if (account) {
       // Inverser l'effet de la transaction
@@ -60,6 +85,49 @@ export async function deleteTransaction(id: number) {
   }
   
   return db.delete(TRANSACTIONS_STORE, id);
+}
+
+// Supprimer plusieurs transactions en batch (optimisé)
+export async function deleteTransactionsBatch(ids: number[]) {
+  const db = await getDB();
+  const transaction = db.transaction([TRANSACTIONS_STORE, ACCOUNTS_STORE], 'readwrite');
+  const txStore = transaction.objectStore(TRANSACTIONS_STORE);
+  const accStore = transaction.objectStore(ACCOUNTS_STORE);
+  
+  const today = new Date().toISOString().slice(0, 10);
+  
+  // Grouper les ajustements de compte par accountId
+  const accountAdjustments: Record<number, number> = {};
+  
+  // Récupérer toutes les transactions et calculer les ajustements
+  for (const id of ids) {
+    const tx = await txStore.get(id);
+    // Seulement ajuster le solde si la transaction est dans le passé
+    if (tx && tx.accountId && tx.date <= today) {
+      if (!accountAdjustments[tx.accountId]) {
+        accountAdjustments[tx.accountId] = 0;
+      }
+      // Inverser l'effet de la transaction
+      if (tx.type === 'expense' || tx.type === 'savings') {
+        accountAdjustments[tx.accountId] += tx.amount;
+      } else if (tx.type === 'income') {
+        accountAdjustments[tx.accountId] -= tx.amount;
+      }
+    }
+    // Supprimer la transaction
+    await txStore.delete(id);
+  }
+  
+  // Appliquer tous les ajustements de compte
+  for (const [accountId, adjustment] of Object.entries(accountAdjustments)) {
+    const account = await accStore.get(Number(accountId));
+    if (account) {
+      account.balance += adjustment;
+      await accStore.put(account);
+    }
+  }
+  
+  await transaction.done;
 }
 import { openDB } from 'idb'
 
@@ -116,8 +184,9 @@ export async function addTransaction(tx: Omit<Transaction, 'id'>) {
   const db = await getDB()
   const id = await db.add(TRANSACTIONS_STORE, tx)
   
-  // Mettre à jour le solde du compte si accountId est spécifié
-  if (tx.accountId) {
+  // Mettre à jour le solde du compte seulement si la date de la transaction est passée
+  const today = new Date().toISOString().slice(0, 10)
+  if (tx.accountId && tx.date <= today) {
     const account = await db.get(ACCOUNTS_STORE, tx.accountId)
     if (account) {
       // Pour les dépenses: diminuer le solde (ou augmenter la dette)
@@ -221,14 +290,17 @@ export async function updateTransactionsCategoryName(oldName: string, newName: s
   const tx = db.transaction(TRANSACTIONS_STORE, 'readwrite')
   const store = tx.objectStore(TRANSACTIONS_STORE)
   let cursor = await store.openCursor()
+  let count = 0
   while (cursor) {
     if (cursor.value.category === oldName) {
       cursor.value.category = newName
       await cursor.update(cursor.value)
+      count++
     }
     cursor = await cursor.continue()
   }
   await tx.done
+  return count
 }
 
 // Subcategories store: supports custom subcategories per category name
@@ -288,6 +360,7 @@ export interface Account {
   name: string
   type: 'Chèque' | 'Épargne' | 'CELI' | 'CELIAPP' | 'REER' | 'Marge de crédit' | 'Marge de crédit hypothécaire' | 'Prêt' | 'Carte de crédit' | 'Fonds de travailleurs' | 'Placements' | 'Hypothèque' | 'Location auto'
   balance: number
+  balanceHistory?: { month: string; balance: number }[] // Format: 'YYYY-MM'
 }
 
 export async function getAccounts(): Promise<Account[]> {
@@ -337,6 +410,44 @@ export async function updateGoal(goal: Goal): Promise<void> {
 export async function deleteGoal(id: number): Promise<void> {
   const db = await getDB()
   await db.delete(GOALS_STORE, id)
+}
+
+// Recalculer tous les soldes de comptes basés uniquement sur les transactions passées
+export async function recalculateAccountBalances(): Promise<void> {
+  const db = await getDB();
+  const today = new Date().toISOString().slice(0, 10);
+  
+  // Récupérer tous les comptes et transactions
+  const accounts = await db.getAll(ACCOUNTS_STORE);
+  const allTransactions = await db.getAll(TRANSACTIONS_STORE);
+  
+  // Filtrer uniquement les transactions passées
+  const pastTransactions = allTransactions.filter(tx => tx.date <= today);
+  
+  // Calculer le solde pour chaque compte
+  const balances: Record<number, number> = {};
+  
+  for (const tx of pastTransactions) {
+    if (tx.accountId) {
+      if (!balances[tx.accountId]) {
+        balances[tx.accountId] = 0;
+      }
+      
+      if (tx.type === 'expense' || tx.type === 'savings') {
+        balances[tx.accountId] -= tx.amount;
+      } else if (tx.type === 'income') {
+        balances[tx.accountId] += tx.amount;
+      }
+    }
+  }
+  
+  // Mettre à jour tous les comptes avec les nouveaux soldes
+  for (const account of accounts) {
+    if (account.id !== undefined) {
+      account.balance = balances[account.id] || 0;
+      await db.put(ACCOUNTS_STORE, account);
+    }
+  }
 }
 
 // Export/Import functions
